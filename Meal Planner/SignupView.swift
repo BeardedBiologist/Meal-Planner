@@ -2,6 +2,7 @@ import SwiftUI
 import AuthenticationServices
 
 struct SignupView: View {
+    private let authManager = AuthenticationManager.shared
     var onSignup: () -> Void
     var onLogin: () -> Void
 
@@ -19,20 +20,30 @@ struct SignupView: View {
                         .foregroundColor(.secondary)
                         .font(.title3)
                 }
+#if DEBUG
+                Button(action: {
+                    authManager.mockSignIn()
+                    onSignup()
+                }) {
+                    Text("Continue as Test User")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.accentColor)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                }
+#else
                 SignInWithAppleButton(.signUp, onRequest: { request in
-                    // Configure Apple request if needed
+                    request.requestedScopes = [.fullName, .email]
                 }, onCompletion: { result in
-                    switch result {
-                    case .success(_):
-                        onSignup()
-                    case .failure(let error):
-                        // Optionally show an error
-                        print(error.localizedDescription)
+                    authManager.handleAppleSignIn(result: result) { success in
+                        if success { onSignup() }
                     }
                 })
                 .frame(height: 48)
                 .cornerRadius(10)
-                .padding(.top, 16)
+#endif
+
                 Button(action: onLogin) {
                     Text("Already have an account? Log In")
                         .font(.footnote)

@@ -4,8 +4,6 @@ struct LandingView: View {
     @State private var showLogin = false
     @State private var showSignup = false
 
-    var onLogin: () -> Void
-
     var body: some View {
         VStack(spacing: 32) {
             Spacer()
@@ -42,7 +40,6 @@ struct LandingView: View {
         .sheet(isPresented: $showLogin) {
             LoginView(onLogin: {
                 showLogin = false
-                onLogin()
             }, onSignup: {
                 showLogin = false
                 showSignup = true
@@ -51,7 +48,6 @@ struct LandingView: View {
         .sheet(isPresented: $showSignup) {
             SignupView(onSignup: {
                 showSignup = false
-                onLogin()
             }, onLogin: {
                 showSignup = false
                 showLogin = true
@@ -61,5 +57,5 @@ struct LandingView: View {
 }
 
 #Preview {
-    LandingView(onLogin: {})
+    LandingView()
 }

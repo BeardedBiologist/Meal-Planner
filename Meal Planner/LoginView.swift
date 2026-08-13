@@ -5,6 +5,8 @@ struct LoginView: View {
     var onLogin: () -> Void
     var onSignup: () -> Void
 
+    private let authManager = AuthenticationManager.shared
+
     var body: some View {
         ZStack {
             LinearGradient(gradient: Gradient(colors: [Color.accentColor.opacity(0.12), Color(.systemBackground)]), startPoint: .top, endPoint: .bottom)
@@ -20,20 +22,29 @@ struct LoginView: View {
                         .font(.title3)
                 }
                 VStack(spacing: 16) {
+#if DEBUG
+                    Button(action: {
+                        authManager.mockSignIn()
+                        onLogin()
+                    }) {
+                        Text("Continue as Test User")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color.accentColor)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+#else
                     SignInWithAppleButton(.signIn, onRequest: { request in
-                        // Configure Apple request if needed
+                        request.requestedScopes = [.fullName, .email]
                     }, onCompletion: { result in
-                        switch result {
-                        case .success(_):
-                            onLogin()
-                        case .failure(let error):
-                            // Optionally show an error
-                            print(error.localizedDescription)
+                        authManager.handleAppleSignIn(result: result) { success in
+                            if success { onLogin() }
                         }
                     })
                     .frame(height: 48)
                     .cornerRadius(10)
-                    .padding(.top, 16)
+#endif
 
                     Button(action: onSignup) {
                         Text("Don't have an account? Sign Up")
