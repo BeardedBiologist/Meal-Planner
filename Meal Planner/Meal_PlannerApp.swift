@@ -18,6 +18,7 @@ struct Meal_PlannerApp: App {
             ShoppingListItem.self,
             StorePrice.self,
             ReceiptLineItem.self,
+            UserSettings.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 

@@ -22,5 +22,13 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(for: [
+            Item.self,
+            Recipe.self,
+            MealPlanEntry.self,
+            ShoppingListItem.self,
+            StorePrice.self,
+            ReceiptLineItem.self,
+            UserSettings.self,
+        ], inMemory: true)
 }
