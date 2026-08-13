@@ -246,6 +246,7 @@ struct AddShoppingItemView: View {
     @State private var useNeededByDate = false
     @State private var neededBy = Date()
     @State private var useCheapestStore = true
+    @State private var savePriceToDatabase = true
 
     private var cheapestOption: StorePriceOption? {
         StorePriceMatcher.cheapestOption(for: name, prices: storePrices, enabledStores: enabledStores)
@@ -286,7 +287,7 @@ struct AddShoppingItemView: View {
                     Toggle(text("Use cheapest tracked store", "Bruk billigste valgte butikk"), isOn: $useCheapestStore)
 
                     if let cheapestOption {
-                        Label(text("Cheapest", "Billigst") + ": \(cheapestOption.store.displayName) · \(cheapestOption.price.formattedCurrency(code: currencyCode))", systemImage: "tag")
+                        Label(text("Cheapest average", "Billigste snitt") + ": \(cheapestOption.store.displayName) · \(cheapestOption.price.formattedCurrency(code: currencyCode)) · \(cheapestOption.sampleCount) " + text("prices", "priser"), systemImage: "tag")
                             .foregroundStyle(.secondary)
                     } else {
                         Text(text("No saved price match yet. Scan receipts to improve suggestions.", "Ingen lagret prismatch ennå. Skann kvitteringer for bedre forslag."))
@@ -303,6 +304,8 @@ struct AddShoppingItemView: View {
 
                     TextField(text("Estimated price", "Estimert pris"), value: $estimatedPrice, format: .number)
                         .keyboardType(.decimalPad)
+
+                    Toggle(text("Save this price for future comparisons", "Lagre denne prisen for fremtidige sammenligninger"), isOn: $savePriceToDatabase)
                 }
 
                 Section(text("Planning", "Planlegging")) {
@@ -352,6 +355,11 @@ struct AddShoppingItemView: View {
             notes: notes,
             neededBy: useNeededByDate ? neededBy : nil
         ))
+
+        if savePriceToDatabase, estimatedPrice > 0 {
+            modelContext.insert(StorePrice(itemName: name, store: store, price: estimatedPrice, quantity: Double(quantity.replacingOccurrences(of: ",", with: ".")) ?? 1, unit: unit, currency: currencyCode, source: "shopping"))
+        }
+
         dismiss()
     }
 
@@ -404,7 +412,7 @@ private struct ShoppingItemRow: View {
                         item.targetStoreRawValue = cheapestOption.store.rawValue
                         item.estimatedUnitPrice = cheapestOption.price
                     } label: {
-                        Label(text("Move to cheaper store", "Flytt til billigere butikk") + ": \(cheapestOption.store.displayName) · \(cheapestOption.price.formattedCurrency(code: currencyCode))", systemImage: "arrow.triangle.branch")
+                        Label(text("Move to cheaper average", "Flytt til billigere snitt") + ": \(cheapestOption.store.displayName) · \(cheapestOption.price.formattedCurrency(code: currencyCode))", systemImage: "arrow.triangle.branch")
                     }
                     .font(.caption)
                     .buttonStyle(.borderless)
@@ -507,28 +515,36 @@ enum ShoppingSortMode: String, CaseIterable, Identifiable {
 struct StorePriceOption {
     let store: GroceryStore
     let price: Double
+    let sampleCount: Int
 }
 
 enum StorePriceMatcher {
     static func cheapestOption(for itemName: String, prices: [StorePrice], enabledStores: [GroceryStore]) -> StorePriceOption? {
-        let normalizedName = normalize(itemName)
-        guard !normalizedName.isEmpty else { return nil }
-        let enabledStoreRawValues = Set(enabledStores.map(\.rawValue))
+        averageOptions(for: itemName, prices: prices, enabledStores: enabledStores)
+            .min { $0.price < $1.price }
+    }
 
-        return prices
+    static func averageOptions(for itemName: String, prices: [StorePrice], enabledStores: [GroceryStore]) -> [StorePriceOption] {
+        let normalizedName = normalize(itemName)
+        guard !normalizedName.isEmpty else { return [] }
+        let enabledStoreRawValues = Set(enabledStores.map(\.rawValue))
+        let matchingPrices = prices
             .filter { enabledStoreRawValues.contains($0.storeRawValue) }
             .filter { price in
                 let normalizedPriceName = normalize(price.itemName)
                 return normalizedPriceName == normalizedName || normalizedPriceName.contains(normalizedName) || normalizedName.contains(normalizedPriceName)
             }
-            .min { $0.price < $1.price }
-            .flatMap { price in
-                guard let store = GroceryStore(rawValue: price.storeRawValue) else { return nil }
-                return StorePriceOption(store: store, price: price.price)
-            }
+
+        let groupedByStore = Dictionary(grouping: matchingPrices, by: \.storeRawValue)
+        return groupedByStore.compactMap { storeRawValue, prices in
+            guard let store = GroceryStore(rawValue: storeRawValue), !prices.isEmpty else { return nil }
+            let average = prices.reduce(0) { $0 + $1.price } / Double(prices.count)
+            return StorePriceOption(store: store, price: average, sampleCount: prices.count)
+        }
+        .sorted { $0.price < $1.price }
     }
 
-    private static func normalize(_ value: String) -> String {
+    static func normalize(_ value: String) -> String {
         value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .components(separatedBy: CharacterSet.alphanumerics.inverted)

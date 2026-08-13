@@ -149,6 +149,7 @@ private struct DashboardView: View {
     @Query private var mealPlans: [MealPlanEntry]
     @Query private var shoppingItems: [ShoppingListItem]
     @Query private var receiptItems: [ReceiptLineItem]
+    @Query private var storePrices: [StorePrice]
 
     private var enabledStoreRawValues: Set<String> {
         Set(enabledStores.map(\.rawValue))
@@ -160,6 +161,10 @@ private struct DashboardView: View {
 
     private var trackedReceiptItems: [ReceiptLineItem] {
         receiptItems.filter { enabledStoreRawValues.contains($0.storeRawValue) }
+    }
+
+    private var trackedStorePrices: [StorePrice] {
+        storePrices.filter { enabledStoreRawValues.contains($0.storeRawValue) }
     }
 
     private var openShoppingTotal: Double {
@@ -180,14 +185,18 @@ private struct DashboardView: View {
                     }
                     HStack(spacing: 12) {
                         MetricTile(title: text("Recipes", "Oppskrifter"), value: "\(recipes.count)", icon: "book.closed")
+                        MetricTile(title: text("Price records", "Prisregistreringer"), value: "\(trackedStorePrices.count)", icon: "tag")
+                    }
+                    HStack(spacing: 12) {
                         MetricTile(title: text("Meals planned", "Måltider planlagt"), value: "\(mealPlans.count)", icon: "calendar")
+                        MetricTile(title: text("Tracked stores", "Valgte butikker"), value: "\(enabledStores.count)", icon: "storefront")
                     }
                 }
 
                 Section(text("Tracked store coverage", "Sporing per butikk")) {
                     ForEach(enabledStores) { store in
-                        let count = trackedReceiptItems.filter { $0.storeRawValue == store.rawValue }.count
-                        Label("\(store.displayName): \(count) " + text("priced items", "prisede varer"), systemImage: "tag")
+                        let count = trackedStorePrices.filter { $0.storeRawValue == store.rawValue }.count
+                        Label("\(store.displayName): \(count) " + text("price records", "prisregistreringer"), systemImage: "tag")
                     }
                 }
 
@@ -715,8 +724,10 @@ private struct ReceiptScannerView: View {
     let recognitionLanguage: ReceiptRecognitionLanguage
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \ReceiptLineItem.purchasedAt, order: .reverse) private var receiptItems: [ReceiptLineItem]
+    @Query(sort: \StorePrice.updatedAt, order: .reverse) private var storePrices: [StorePrice]
     @State private var selectedStore: GroceryStore
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var showManualPriceEntry = false
 
     init(language: AppLanguage, currencyCode: String, enabledStores: [GroceryStore], recognitionLanguage: ReceiptRecognitionLanguage) {
         self.language = language
@@ -729,9 +740,35 @@ private struct ReceiptScannerView: View {
     @State private var isScanning = false
     @State private var scanError: String?
 
+    private var enabledStoreRawValues: Set<String> {
+        Set(enabledStores.map(\.rawValue))
+    }
+
     private var trackedReceiptItems: [ReceiptLineItem] {
-        let enabledStoreRawValues = Set(enabledStores.map(\.rawValue))
-        return receiptItems.filter { enabledStoreRawValues.contains($0.storeRawValue) }
+        receiptItems.filter { enabledStoreRawValues.contains($0.storeRawValue) }
+    }
+
+    private var trackedStorePrices: [StorePrice] {
+        storePrices.filter { enabledStoreRawValues.contains($0.storeRawValue) }
+    }
+
+    private var averagePriceGroups: [AverageStorePrice] {
+        let grouped = Dictionary(grouping: trackedStorePrices) { price in
+            StorePriceMatcher.normalize(price.itemName) + "|" + price.storeRawValue
+        }
+
+        return grouped.compactMap { _, prices in
+            guard let first = prices.first, let store = GroceryStore(rawValue: first.storeRawValue), !prices.isEmpty else { return nil }
+            let average = prices.reduce(0) { $0 + $1.price } / Double(prices.count)
+            let latestDate = prices.map(\.updatedAt).max() ?? first.updatedAt
+            return AverageStorePrice(itemName: first.itemName, store: store, averagePrice: average, sampleCount: prices.count, latestDate: latestDate)
+        }
+        .sorted { lhs, rhs in
+            if lhs.itemName.localizedCaseInsensitiveCompare(rhs.itemName) == .orderedSame {
+                return lhs.averagePrice < rhs.averagePrice
+            }
+            return lhs.itemName.localizedCaseInsensitiveCompare(rhs.itemName) == .orderedAscending
+        }
     }
 
     var body: some View {
@@ -746,6 +783,12 @@ private struct ReceiptScannerView: View {
 
                     PhotosPicker(selection: $selectedPhoto, matching: .images) {
                         Label(text("Choose Receipt Image", "Velg kvitteringsbilde"), systemImage: "photo")
+                    }
+
+                    Button {
+                        showManualPriceEntry = true
+                    } label: {
+                        Label(text("Enter Price Manually", "Legg inn pris manuelt"), systemImage: "plus.circle")
                     }
 
                     if isScanning {
@@ -781,6 +824,27 @@ private struct ReceiptScannerView: View {
                     }
                 }
 
+                Section(text("Average price database", "Snittpris-database")) {
+                    if averagePriceGroups.isEmpty {
+                        Text(text("No saved product prices yet. Scan receipts or enter prices manually to build comparisons by store.", "Ingen lagrede produktpriser ennå. Skann kvitteringer eller legg inn priser manuelt for å bygge sammenligninger per butikk."))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(averagePriceGroups) { price in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(price.itemName)
+                                        .font(.headline)
+                                    Text("\(price.store.displayName) · \(price.sampleCount) " + text("samples", "prøver") + " · " + text("updated", "oppdatert") + " \(price.latestDate.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(price.averagePrice.formattedCurrency(code: currencyCode))
+                            }
+                        }
+                    }
+                }
+
                 Section(text("Saved receipt prices", "Lagrede kvitteringspriser")) {
                     if trackedReceiptItems.isEmpty {
                         Text(text("No receipt prices saved yet for tracked stores.", "Ingen kvitteringspriser lagret ennå for valgte butikker."))
@@ -803,6 +867,9 @@ private struct ReceiptScannerView: View {
                 }
             }
             .navigationTitle(text("Receipts", "Kvitteringer"))
+            .sheet(isPresented: $showManualPriceEntry) {
+                ManualPriceEntryView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
+            }
             .onChange(of: selectedPhoto) { _, newValue in
                 guard let newValue else { return }
                 Task { await scanReceipt(from: newValue) }
@@ -837,7 +904,7 @@ private struct ReceiptScannerView: View {
     private func saveRecognizedItems() {
         for line in recognizedLines {
             modelContext.insert(ReceiptLineItem(itemName: line.name, price: line.price, store: selectedStore, rawText: line.rawText))
-            modelContext.insert(StorePrice(itemName: line.name, store: selectedStore, price: line.price))
+            modelContext.insert(StorePrice(itemName: line.name, store: selectedStore, price: line.price, quantity: 1, unit: "stk", currency: currencyCode, source: "receipt"))
         }
         recognizedLines = []
     }
@@ -1057,6 +1124,81 @@ private struct SettingsFormView: View {
         for price in storePrices {
             modelContext.delete(price)
         }
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+}
+
+private struct AverageStorePrice: Identifiable {
+    let id = UUID()
+    let itemName: String
+    let store: GroceryStore
+    let averagePrice: Double
+    let sampleCount: Int
+    let latestDate: Date
+}
+
+private struct ManualPriceEntryView: View {
+    let language: AppLanguage
+    let currencyCode: String
+    let enabledStores: [GroceryStore]
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @State private var itemName = ""
+    @State private var store: GroceryStore
+    @State private var price = 0.0
+    @State private var quantity = 1.0
+    @State private var unit = "stk"
+    @State private var purchasedAt = Date()
+
+    init(language: AppLanguage, currencyCode: String, enabledStores: [GroceryStore]) {
+        self.language = language
+        self.currencyCode = currencyCode
+        self.enabledStores = enabledStores
+        _store = State(initialValue: enabledStores.first ?? .rema1000)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(text("Product", "Produkt")) {
+                    TextField(text("Item name", "Varenavn"), text: $itemName)
+                    Picker(text("Store", "Butikk"), selection: $store) {
+                        ForEach(enabledStores) { store in
+                            Text(store.displayName).tag(store)
+                        }
+                    }
+                }
+
+                Section(text("Price", "Pris")) {
+                    TextField(text("Price", "Pris") + " (\(currencyCode))", value: $price, format: .number)
+                        .keyboardType(.decimalPad)
+                    HStack {
+                        TextField(text("Amount", "Mengde"), value: $quantity, format: .number)
+                            .keyboardType(.decimalPad)
+                        TextField(text("Unit", "Enhet"), text: $unit)
+                    }
+                    DatePicker(text("Date", "Dato"), selection: $purchasedAt, displayedComponents: .date)
+                }
+            }
+            .navigationTitle(text("Manual Price", "Manuell pris"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(text("Cancel", "Avbryt")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(text("Save", "Lagre"), action: save)
+                        .disabled(itemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || price <= 0)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        modelContext.insert(StorePrice(itemName: itemName, store: store, price: price, quantity: quantity, unit: unit, currency: currencyCode, source: "manual", updatedAt: purchasedAt))
+        dismiss()
     }
 
     private func text(_ english: String, _ norwegian: String) -> String {

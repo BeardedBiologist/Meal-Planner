@@ -583,21 +583,29 @@ final class StorePrice {
     var itemName: String
     var storeRawValue: String
     var price: Double
+    var quantity: Double = 1
     var unit: String
     var currency: String
+    var source: String = "manual"
     var updatedAt: Date
 
-    init(itemName: String, store: GroceryStore, price: Double, unit: String = "stk", currency: String = "NOK", updatedAt: Date = .now) {
+    init(itemName: String, store: GroceryStore, price: Double, quantity: Double = 1, unit: String = "stk", currency: String = "NOK", source: String = "manual", updatedAt: Date = .now) {
         self.itemName = itemName
         self.storeRawValue = store.rawValue
         self.price = price
+        self.quantity = quantity
         self.unit = unit
         self.currency = currency
+        self.source = source
         self.updatedAt = updatedAt
     }
 
     var store: GroceryStore {
         GroceryStore(rawValue: storeRawValue) ?? .rema1000
+    }
+
+    var amountDescription: String {
+        "\(quantity.formatted()) \(unit)"
     }
 }
 
