@@ -1,6 +1,53 @@
 import SwiftData
 import SwiftUI
 
+struct ShoppingHomeView: View {
+    let language: AppLanguage
+    let currencyCode: String
+    let enabledStores: [GroceryStore]
+    @State private var selectedView: ShoppingHomeMode = .list
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker(text("Shopping section", "Handlevisning"), selection: $selectedView) {
+                ForEach(ShoppingHomeMode.allCases) { mode in
+                    Text(mode.title(language: language)).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding([.horizontal, .top])
+            .background(Color(.systemGroupedBackground))
+
+            switch selectedView {
+            case .list:
+                ShoppingListView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
+            case .prices:
+                PriceTrackerView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
+            }
+        }
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+}
+
+private enum ShoppingHomeMode: String, CaseIterable, Identifiable {
+    case list
+    case prices
+
+    var id: String { rawValue }
+
+    func title(language: AppLanguage) -> String {
+        switch (self, language) {
+        case (.list, .english): "List"
+        case (.list, .norwegian): "Liste"
+        case (.prices, .english): "Prices"
+        case (.prices, .norwegian): "Priser"
+        }
+    }
+}
+
 struct ShoppingListView: View {
     let language: AppLanguage
     let currencyCode: String
@@ -13,6 +60,7 @@ struct ShoppingListView: View {
     @State private var sortMode: ShoppingSortMode = .storeThenCategory
     @State private var showCheckedItems = true
     @State private var selectedStoreFilter: GroceryStore?
+    @State private var editingItem: ShoppingListItem?
 
     private var enabledStoreRawValues: Set<String> {
         Set(enabledStores.map(\.rawValue))
@@ -83,12 +131,23 @@ struct ShoppingListView: View {
             .navigationTitle(text("Shopping List", "Handleliste"))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        assignOpenItemsToCheapestStores()
+                    Menu {
+                        Button {
+                            assignOpenItemsToCheapestStores()
+                        } label: {
+                            Label(text("Optimize stores", "Optimaliser butikker"), systemImage: "wand.and.stars")
+                        }
+                        .disabled(openItems.isEmpty)
+
+                        Button {
+                            saveShoppingPricesToDatabase()
+                        } label: {
+                            Label(text("Sync prices", "Synk priser"), systemImage: "tag")
+                        }
+                        .disabled(!visibleItems.contains { $0.estimatedUnitPrice > 0 })
                     } label: {
-                        Label(text("Optimize", "Optimaliser"), systemImage: "wand.and.stars")
+                        Label(text("Tools", "Verktøy"), systemImage: "ellipsis.circle")
                     }
-                    .disabled(openItems.isEmpty)
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
@@ -101,6 +160,9 @@ struct ShoppingListView: View {
             }
             .sheet(isPresented: $showAddItem) {
                 AddShoppingItemView(language: language, currencyCode: currencyCode, enabledStores: enabledStores, storePrices: storePrices)
+            }
+            .sheet(item: $editingItem) { item in
+                EditShoppingItemView(item: item, language: language, currencyCode: currencyCode, enabledStores: enabledStores, storePrices: storePrices)
             }
         }
     }
@@ -167,6 +229,8 @@ struct ShoppingListView: View {
                     Section("\(group.store.displayName) · \(group.total.formattedCurrency(code: currencyCode))") {
                         ForEach(group.items) { item in
                             ShoppingItemRow(item: item, language: language, currencyCode: currencyCode, cheapestOption: cheapestOption(for: item))
+                                .contentShape(Rectangle())
+                                .onTapGesture { editingItem = item }
                         }
                         .onDelete { offsets in
                             deleteItems(offsets: offsets, from: group.items)
@@ -178,6 +242,8 @@ struct ShoppingListView: View {
                     Section("\(group.category.title(language: language)) · \(group.total.formattedCurrency(code: currencyCode))") {
                         ForEach(group.items) { item in
                             ShoppingItemRow(item: item, language: language, currencyCode: currencyCode, cheapestOption: cheapestOption(for: item))
+                                .contentShape(Rectangle())
+                                .onTapGesture { editingItem = item }
                         }
                         .onDelete { offsets in
                             deleteItems(offsets: offsets, from: group.items)
@@ -188,6 +254,8 @@ struct ShoppingListView: View {
                 Section(text("All items", "Alle varer")) {
                     ForEach(visibleItems) { item in
                         ShoppingItemRow(item: item, language: language, currencyCode: currencyCode, cheapestOption: cheapestOption(for: item))
+                            .contentShape(Rectangle())
+                            .onTapGesture { editingItem = item }
                     }
                     .onDelete { offsets in
                         deleteItems(offsets: offsets, from: visibleItems)
@@ -212,6 +280,35 @@ struct ShoppingListView: View {
     private func deleteItems(offsets: IndexSet, from source: [ShoppingListItem]) {
         for index in offsets {
             modelContext.delete(source[index])
+        }
+    }
+
+    private func saveShoppingPricesToDatabase() {
+        for item in visibleItems where item.estimatedUnitPrice > 0 {
+            upsertStorePrice(
+                itemName: item.name,
+                store: item.targetStore,
+                price: item.estimatedUnitPrice,
+                quantity: Double(item.quantity.replacingOccurrences(of: ",", with: ".")) ?? 1,
+                unit: item.unit,
+                source: "shopping"
+            )
+        }
+    }
+
+    private func upsertStorePrice(itemName: String, store: GroceryStore, price: Double, quantity: Double, unit: String, source: String) {
+        if let existing = storePrices.first(where: {
+            StorePriceMatcher.normalize($0.itemName) == StorePriceMatcher.normalize(itemName) && $0.storeRawValue == store.rawValue
+        }) {
+            existing.itemName = itemName
+            existing.price = price
+            existing.quantity = quantity
+            existing.unit = unit
+            existing.currency = currencyCode
+            existing.source = source
+            existing.updatedAt = .now
+        } else {
+            modelContext.insert(StorePrice(itemName: itemName, store: store, price: price, quantity: quantity, unit: unit, currency: currencyCode, source: source))
         }
     }
 
@@ -357,10 +454,138 @@ struct AddShoppingItemView: View {
         ))
 
         if savePriceToDatabase, estimatedPrice > 0 {
-            modelContext.insert(StorePrice(itemName: name, store: store, price: estimatedPrice, quantity: Double(quantity.replacingOccurrences(of: ",", with: ".")) ?? 1, unit: unit, currency: currencyCode, source: "shopping"))
+            upsertStorePrice()
         }
 
         dismiss()
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+
+    private func upsertStorePrice() {
+        let normalizedName = StorePriceMatcher.normalize(name)
+        if let existing = storePrices.first(where: {
+            StorePriceMatcher.normalize($0.itemName) == normalizedName && $0.storeRawValue == store.rawValue
+        }) {
+            existing.itemName = name
+            existing.price = estimatedPrice
+            existing.quantity = Double(quantity.replacingOccurrences(of: ",", with: ".")) ?? 1
+            existing.unit = unit
+            existing.currency = currencyCode
+            existing.source = "shopping"
+            existing.updatedAt = .now
+        } else {
+            modelContext.insert(StorePrice(itemName: name, store: store, price: estimatedPrice, quantity: Double(quantity.replacingOccurrences(of: ",", with: ".")) ?? 1, unit: unit, currency: currencyCode, source: "shopping"))
+        }
+    }
+}
+
+private struct EditShoppingItemView: View {
+    @Bindable var item: ShoppingListItem
+    let language: AppLanguage
+    let currencyCode: String
+    let enabledStores: [GroceryStore]
+    let storePrices: [StorePrice]
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @State private var store: GroceryStore
+    @State private var useNeededByDate: Bool
+    @State private var neededBy: Date
+    @State private var savePriceToDatabase = true
+
+    init(item: ShoppingListItem, language: AppLanguage, currencyCode: String, enabledStores: [GroceryStore], storePrices: [StorePrice]) {
+        self.item = item
+        self.language = language
+        self.currencyCode = currencyCode
+        self.enabledStores = enabledStores
+        self.storePrices = storePrices
+        _store = State(initialValue: item.targetStore)
+        _useNeededByDate = State(initialValue: item.neededBy != nil)
+        _neededBy = State(initialValue: item.neededBy ?? Date())
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(text("Item", "Vare")) {
+                    TextField(text("Item", "Vare"), text: $item.name)
+                    HStack {
+                        TextField(text("Quantity", "Antall"), text: $item.quantity)
+                        TextField(text("Unit", "Enhet"), text: $item.unit)
+                    }
+                    Picker(text("Category", "Kategori"), selection: $item.categoryRawValue) {
+                        ForEach(ShoppingCategory.allCases) { category in
+                            Text(category.title(language: language)).tag(category.rawValue)
+                        }
+                    }
+                    Picker(text("Priority", "Prioritet"), selection: $item.priorityRawValue) {
+                        ForEach(ShoppingPriority.allCases) { priority in
+                            Text(priority.title(language: language)).tag(priority.rawValue)
+                        }
+                    }
+                }
+
+                Section(text("Store and price", "Butikk og pris")) {
+                    Picker(text("Store", "Butikk"), selection: $store) {
+                        ForEach(enabledStores) { store in
+                            Text(store.displayName).tag(store)
+                        }
+                    }
+                    TextField(text("Estimated price", "Estimert pris"), value: $item.estimatedUnitPrice, format: .number)
+                        .keyboardType(.decimalPad)
+                    Toggle(text("Save this price for future comparisons", "Lagre denne prisen for fremtidige sammenligninger"), isOn: $savePriceToDatabase)
+                }
+
+                Section(text("Planning", "Planlegging")) {
+                    Toggle(text("Needed by date", "Trengs innen dato"), isOn: $useNeededByDate)
+                    if useNeededByDate {
+                        DatePicker(text("Needed by", "Trengs innen"), selection: $neededBy, displayedComponents: .date)
+                    }
+                    Toggle(text("Checked", "Avkrysset"), isOn: $item.isChecked)
+                    TextField(text("Notes", "Notater"), text: $item.notes, axis: .vertical)
+                        .lineLimit(3, reservesSpace: true)
+                }
+            }
+            .navigationTitle(text("Edit Item", "Rediger vare"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(text("Cancel", "Avbryt")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(text("Done", "Ferdig"), action: save)
+                        .disabled(item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        item.targetStoreRawValue = store.rawValue
+        item.neededBy = useNeededByDate ? neededBy : nil
+        if savePriceToDatabase, item.estimatedUnitPrice > 0 {
+            upsertStorePrice()
+        }
+        dismiss()
+    }
+
+    private func upsertStorePrice() {
+        let normalizedName = StorePriceMatcher.normalize(item.name)
+        let quantity = Double(item.quantity.replacingOccurrences(of: ",", with: ".")) ?? 1
+        if let existing = storePrices.first(where: {
+            StorePriceMatcher.normalize($0.itemName) == normalizedName && $0.storeRawValue == store.rawValue
+        }) {
+            existing.itemName = item.name
+            existing.price = item.estimatedUnitPrice
+            existing.quantity = quantity
+            existing.unit = item.unit
+            existing.currency = currencyCode
+            existing.source = "shopping"
+            existing.updatedAt = .now
+        } else {
+            modelContext.insert(StorePrice(itemName: item.name, store: store, price: item.estimatedUnitPrice, quantity: quantity, unit: item.unit, currency: currencyCode, source: "shopping"))
+        }
     }
 
     private func text(_ english: String, _ norwegian: String) -> String {
@@ -439,6 +664,274 @@ private struct ShoppingItemRow: View {
         case .low: "arrow.down.circle"
         case .normal: "minus.circle"
         case .high: "exclamationmark.circle"
+        }
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+}
+
+struct PriceTrackerView: View {
+    let language: AppLanguage
+    let currencyCode: String
+    let enabledStores: [GroceryStore]
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \StorePrice.itemName) private var prices: [StorePrice]
+    @State private var showAddPrice = false
+    @State private var editingPrice: StorePrice?
+    @State private var searchText = ""
+    @State private var selectedStoreFilter: GroceryStore?
+
+    private var enabledStoreRawValues: Set<String> {
+        Set(enabledStores.map(\.rawValue))
+    }
+
+    private var visiblePrices: [StorePrice] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return prices
+            .filter { enabledStoreRawValues.contains($0.storeRawValue) }
+            .filter { selectedStoreFilter == nil || $0.storeRawValue == selectedStoreFilter?.rawValue }
+            .filter { query.isEmpty || $0.itemName.localizedCaseInsensitiveContains(query) }
+            .sorted { lhs, rhs in
+                if lhs.itemName.localizedCaseInsensitiveCompare(rhs.itemName) != .orderedSame {
+                    return lhs.itemName.localizedCaseInsensitiveCompare(rhs.itemName) == .orderedAscending
+                }
+                return lhs.price < rhs.price
+            }
+    }
+
+    private var itemGroups: [(name: String, prices: [StorePrice])] {
+        let grouped = Dictionary(grouping: visiblePrices) { StorePriceMatcher.normalize($0.itemName) }
+        return grouped.keys.sorted().map { key in
+            let groupPrices = grouped[key] ?? []
+            return (groupPrices.first?.itemName ?? key, groupPrices)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                summarySection
+                controlsSection
+
+                if itemGroups.isEmpty {
+                    ContentUnavailableView(text("No prices tracked", "Ingen priser lagret"), systemImage: "tag", description: Text(text("Add supermarket prices manually or scan receipts to build comparisons by store.", "Legg inn butikkpriser manuelt eller skann kvitteringer for å bygge sammenligninger per butikk.")))
+                } else {
+                    ForEach(itemGroups, id: \.name) { group in
+                        Section(group.name) {
+                            ForEach(group.prices) { price in
+                                StorePriceRow(price: price, language: language, currencyCode: currencyCode)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        editingPrice = price
+                                    }
+                            }
+                            .onDelete { offsets in
+                                deletePrices(offsets: offsets, from: group.prices)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(text("Prices", "Priser"))
+            .searchable(text: $searchText, prompt: text("Search items", "Søk etter varer"))
+            .toolbar {
+                Button {
+                    showAddPrice = true
+                } label: {
+                    Label(text("Add Price", "Legg til pris"), systemImage: "plus")
+                }
+            }
+            .sheet(isPresented: $showAddPrice) {
+                StorePriceFormView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
+            }
+            .sheet(item: $editingPrice) { price in
+                EditStorePriceView(price: price, language: language, currencyCode: currencyCode, enabledStores: enabledStores)
+            }
+        }
+    }
+
+    private var summarySection: some View {
+        Section {
+            HStack(spacing: 12) {
+                ShoppingMetricTile(title: text("Items", "Varer"), value: "\(Set(visiblePrices.map { StorePriceMatcher.normalize($0.itemName) }).count)", icon: "shippingbox")
+                ShoppingMetricTile(title: text("Price records", "Prislogger"), value: "\(visiblePrices.count)", icon: "tag")
+            }
+
+            if let cheapest = visiblePrices.min(by: { $0.price < $1.price }) {
+                Label(text("Lowest saved price", "Laveste lagrede pris") + ": \(cheapest.itemName) · \(cheapest.store.displayName) · \(cheapest.price.formattedCurrency(code: cheapest.currency))", systemImage: "arrow.down.circle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var controlsSection: some View {
+        Section(text("Filters", "Filtre")) {
+            Picker(text("Store", "Butikk"), selection: $selectedStoreFilter) {
+                Text(text("All tracked stores", "Alle valgte butikker")).tag(nil as GroceryStore?)
+                ForEach(enabledStores) { store in
+                    Text(store.displayName).tag(store as GroceryStore?)
+                }
+            }
+        }
+    }
+
+    private func deletePrices(offsets: IndexSet, from source: [StorePrice]) {
+        for index in offsets {
+            modelContext.delete(source[index])
+        }
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+}
+
+private struct StorePriceRow: View {
+    let price: StorePrice
+    let language: AppLanguage
+    let currencyCode: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Label(price.store.displayName, systemImage: "storefront")
+                    .font(.headline)
+                Spacer()
+                Text(price.price.formattedCurrency(code: price.currency.isEmpty ? currencyCode : price.currency))
+                    .font(.subheadline.weight(.semibold))
+            }
+
+            Text("\(price.amountDescription) · \(price.source.capitalized)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Text(price.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 3)
+    }
+}
+
+private struct StorePriceFormView: View {
+    let language: AppLanguage
+    let currencyCode: String
+    let enabledStores: [GroceryStore]
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @State private var itemName = ""
+    @State private var store: GroceryStore
+    @State private var price = 0.0
+    @State private var quantity = 1.0
+    @State private var unit = "stk"
+    @State private var source = "manual"
+
+    init(language: AppLanguage, currencyCode: String, enabledStores: [GroceryStore]) {
+        self.language = language
+        self.currencyCode = currencyCode
+        self.enabledStores = enabledStores
+        _store = State(initialValue: enabledStores.first ?? .rema1000)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(text("Item", "Vare")) {
+                    TextField(text("Item name", "Varenavn"), text: $itemName)
+                    Picker(text("Store", "Butikk"), selection: $store) {
+                        ForEach(enabledStores) { store in
+                            Text(store.displayName).tag(store)
+                        }
+                    }
+                }
+
+                Section(text("Price", "Pris")) {
+                    TextField(text("Price", "Pris") + " (\(currencyCode))", value: $price, format: .number)
+                        .keyboardType(.decimalPad)
+                    TextField(text("Quantity", "Mengde"), value: $quantity, format: .number)
+                        .keyboardType(.decimalPad)
+                    TextField(text("Unit", "Enhet"), text: $unit)
+                    TextField(text("Source", "Kilde"), text: $source)
+                        .textInputAutocapitalization(.never)
+                }
+            }
+            .navigationTitle(text("New Price", "Ny pris"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(text("Cancel", "Avbryt")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(text("Save", "Lagre"), action: save)
+                        .disabled(itemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || price <= 0)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        modelContext.insert(StorePrice(itemName: itemName, store: store, price: price, quantity: quantity, unit: unit, currency: currencyCode, source: source.isEmpty ? "manual" : source))
+        dismiss()
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+}
+
+private struct EditStorePriceView: View {
+    @Bindable var price: StorePrice
+    let language: AppLanguage
+    let currencyCode: String
+    let enabledStores: [GroceryStore]
+    @Environment(\.dismiss) private var dismiss
+    @State private var store: GroceryStore
+
+    init(price: StorePrice, language: AppLanguage, currencyCode: String, enabledStores: [GroceryStore]) {
+        self.price = price
+        self.language = language
+        self.currencyCode = currencyCode
+        self.enabledStores = enabledStores
+        _store = State(initialValue: price.store)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(text("Item", "Vare")) {
+                    TextField(text("Item name", "Varenavn"), text: $price.itemName)
+                    Picker(text("Store", "Butikk"), selection: $store) {
+                        ForEach(enabledStores) { store in
+                            Text(store.displayName).tag(store)
+                        }
+                    }
+                }
+
+                Section(text("Price", "Pris")) {
+                    TextField(text("Price", "Pris") + " (\(currencyCode))", value: $price.price, format: .number)
+                        .keyboardType(.decimalPad)
+                    TextField(text("Quantity", "Mengde"), value: $price.quantity, format: .number)
+                        .keyboardType(.decimalPad)
+                    TextField(text("Unit", "Enhet"), text: $price.unit)
+                    TextField(text("Source", "Kilde"), text: $price.source)
+                        .textInputAutocapitalization(.never)
+                    DatePicker(text("Updated", "Oppdatert"), selection: $price.updatedAt)
+                }
+            }
+            .navigationTitle(text("Edit Price", "Rediger pris"))
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(text("Done", "Ferdig")) {
+                        price.storeRawValue = store.rawValue
+                        if price.currency.isEmpty {
+                            price.currency = currencyCode
+                        }
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 

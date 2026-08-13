@@ -17,6 +17,8 @@ struct Meal_PlannerApp: App {
             MealPlanEntry.self,
             ShoppingListItem.self,
             StorePrice.self,
+            ChatConversation.self,
+            ChatEntry.self,
             ReceiptLineItem.self,
             UserSettings.self,
         ])

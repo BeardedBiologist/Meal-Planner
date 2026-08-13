@@ -28,6 +28,8 @@ struct ContentView: View {
             MealPlanEntry.self,
             ShoppingListItem.self,
             StorePrice.self,
+            ChatConversation.self,
+            ChatEntry.self,
             ReceiptLineItem.self,
             UserSettings.self,
         ], inMemory: true)

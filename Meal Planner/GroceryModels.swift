@@ -194,6 +194,7 @@ final class UserSettings {
     var includeTaxInPrices: Bool = true
     var receiptRecognitionLanguageRawValue: String = ReceiptRecognitionLanguage.norwegianAndEnglish.rawValue
     var dietaryPreferenceRawValues: [String] = []
+    var avoidedIngredients: [String] = []
 
     init(
         displayName: String = "",
@@ -212,7 +213,8 @@ final class UserSettings {
         showBudgetWarnings: Bool = true,
         includeTaxInPrices: Bool = true,
         receiptRecognitionLanguage: ReceiptRecognitionLanguage = .norwegianAndEnglish,
-        dietaryPreferences: [DietaryPreference] = []
+        dietaryPreferences: [DietaryPreference] = [],
+        avoidedIngredients: [String] = []
     ) {
         self.displayName = displayName
         self.email = email
@@ -231,6 +233,7 @@ final class UserSettings {
         self.includeTaxInPrices = includeTaxInPrices
         self.receiptRecognitionLanguageRawValue = receiptRecognitionLanguage.rawValue
         self.dietaryPreferenceRawValues = dietaryPreferences.map(\.rawValue)
+        self.avoidedIngredients = avoidedIngredients
     }
 
     var preferredLanguage: AppLanguage {
@@ -606,6 +609,40 @@ final class StorePrice {
 
     var amountDescription: String {
         "\(quantity.formatted()) \(unit)"
+    }
+}
+
+@Model
+final class ChatConversation {
+    var id: UUID
+    var title: String
+    var createdAt: Date
+    var updatedAt: Date
+
+    init(id: UUID = UUID(), title: String = "New chat", createdAt: Date = .now, updatedAt: Date = .now) {
+        self.id = id
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+@Model
+final class ChatEntry {
+    var id: UUID
+    var conversationID: UUID
+    var roleRawValue: String
+    var text: String
+    var timestamp: Date
+    var toolActions: [String]
+
+    init(id: UUID = UUID(), conversationID: UUID, role: String, text: String, timestamp: Date = .now, toolActions: [String] = []) {
+        self.id = id
+        self.conversationID = conversationID
+        self.roleRawValue = role
+        self.text = text
+        self.timestamp = timestamp
+        self.toolActions = toolActions
     }
 }
 

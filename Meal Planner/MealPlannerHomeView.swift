@@ -4,10 +4,11 @@ import SwiftUI
 @preconcurrency import Vision
 
 private enum MainAppTab: String, CaseIterable, Identifiable {
-    case overview
+    case chat
     case plan
     case recipes
     case shopping
+    case prices
     case receipts
     case settings
 
@@ -15,10 +16,11 @@ private enum MainAppTab: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .overview: "chart.bar"
+        case .chat: "sparkles"
         case .plan: "calendar"
         case .recipes: "book.closed"
         case .shopping: "cart"
+        case .prices: "tag"
         case .receipts: "doc.text.viewfinder"
         case .settings: "gearshape"
         }
@@ -26,14 +28,16 @@ private enum MainAppTab: String, CaseIterable, Identifiable {
 
     func title(language: AppLanguage) -> String {
         switch (self, language) {
-        case (.overview, .english): "Overview"
-        case (.overview, .norwegian): "Oversikt"
+        case (.chat, .english): "Chat"
+        case (.chat, .norwegian): "Chat"
         case (.plan, .english): "Plan"
         case (.plan, .norwegian): "Plan"
         case (.recipes, .english): "Recipes"
         case (.recipes, .norwegian): "Oppskrifter"
         case (.shopping, .english): "Shopping"
         case (.shopping, .norwegian): "Handle"
+        case (.prices, .english): "Prices"
+        case (.prices, .norwegian): "Priser"
         case (.receipts, .english): "Receipts"
         case (.receipts, .norwegian): "Kvittering"
         case (.settings, .english): "Settings"
@@ -45,7 +49,8 @@ private enum MainAppTab: String, CaseIterable, Identifiable {
 struct MealPlannerHomeView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var settingsRecords: [UserSettings]
-    @State private var selectedTab: MainAppTab = .overview
+    private let chatService = GeminiService.shared
+    @State private var selectedTab: MainAppTab = .chat
 
     private var settings: UserSettings? {
         settingsRecords.first
@@ -65,32 +70,37 @@ struct MealPlannerHomeView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            selectedTabView
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        TabView(selection: $selectedTab) {
+            ChatView(language: language, service: chatService)
+                .tabItem { Label(MainAppTab.chat.title(language: language), systemImage: MainAppTab.chat.systemImage) }
+                .tag(MainAppTab.chat)
 
-            MainTabBar(selectedTab: $selectedTab, language: language)
+            MealPlanView(language: language, settings: settings, enabledStores: enabledStores)
+                .tabItem { Label(MainAppTab.plan.title(language: language), systemImage: MainAppTab.plan.systemImage) }
+                .tag(MainAppTab.plan)
+
+            RecipesView(language: language, currencyCode: currencyCode, enabledStores: enabledStores, defaultServings: settings?.householdSize ?? 2, autoAddIngredientsToShoppingList: settings?.autoAddIngredientsToShoppingList ?? true)
+                .tabItem { Label(MainAppTab.recipes.title(language: language), systemImage: MainAppTab.recipes.systemImage) }
+                .tag(MainAppTab.recipes)
+
+            ShoppingListView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
+                .tabItem { Label(MainAppTab.shopping.title(language: language), systemImage: MainAppTab.shopping.systemImage) }
+                .tag(MainAppTab.shopping)
+
+            PriceTrackerView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
+                .tabItem { Label(MainAppTab.prices.title(language: language), systemImage: MainAppTab.prices.systemImage) }
+                .tag(MainAppTab.prices)
+
+            ReceiptScannerView(language: language, currencyCode: currencyCode, enabledStores: enabledStores, recognitionLanguage: settings?.receiptRecognitionLanguage ?? .norwegianAndEnglish)
+                .tabItem { Label(MainAppTab.receipts.title(language: language), systemImage: MainAppTab.receipts.systemImage) }
+                .tag(MainAppTab.receipts)
+
+            SettingsView(language: language, settings: settings, enabledStores: enabledStores)
+                .tabItem { Label(MainAppTab.settings.title(language: language), systemImage: MainAppTab.settings.systemImage) }
+                .tag(MainAppTab.settings)
         }
         .task {
             ensureSettingsRecord()
-        }
-    }
-
-    @ViewBuilder
-    private var selectedTabView: some View {
-        switch selectedTab {
-        case .overview:
-            DashboardView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
-        case .plan:
-            MealPlanView(language: language, settings: settings, enabledStores: enabledStores)
-        case .recipes:
-            RecipesView(language: language, currencyCode: currencyCode, enabledStores: enabledStores, defaultServings: settings?.householdSize ?? 2, autoAddIngredientsToShoppingList: settings?.autoAddIngredientsToShoppingList ?? true)
-        case .shopping:
-            ShoppingListView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
-        case .receipts:
-            ReceiptScannerView(language: language, currencyCode: currencyCode, enabledStores: enabledStores, recognitionLanguage: settings?.receiptRecognitionLanguage ?? .norwegianAndEnglish)
-        case .settings:
-            SettingsView(language: language, settings: settings, enabledStores: enabledStores)
         }
     }
 
@@ -101,43 +111,6 @@ struct MealPlannerHomeView: View {
 
     private func text(_ english: String, _ norwegian: String) -> String {
         language == .english ? english : norwegian
-    }
-}
-
-private struct MainTabBar: View {
-    @Binding var selectedTab: MainAppTab
-    let language: AppLanguage
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(MainAppTab.allCases) { tab in
-                Button {
-                    selectedTab = tab
-                } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: tab.systemImage)
-                            .font(.system(size: 18, weight: selectedTab == tab ? .semibold : .regular))
-                        Text(tab.title(language: language))
-                            .font(.caption2)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.58)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 54)
-                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.secondary)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(tab.title(language: language))
-            }
-        }
-        .padding(.horizontal, 4)
-        .padding(.top, 5)
-        .padding(.bottom, 7)
-        .background(.bar)
-        .overlay(alignment: .top) {
-            Divider()
-        }
     }
 }
 
@@ -264,6 +237,8 @@ private struct MealPlanView: View {
     @State private var visibleDate = Date()
     @State private var addMealDate = Date()
     @State private var showAddMeal = false
+    @State private var showHelloFreshDelivery = false
+    @State private var editingMealPlan: MealPlanEntry?
 
     private var calendar: Calendar {
         var calendar = Calendar.current
@@ -323,11 +298,21 @@ private struct MealPlanView: View {
             }
             .navigationTitle(text("Meal Plan", "Måltidsplan"))
             .toolbar {
-                Button {
-                    addMealDate = visibleDate
-                    showAddMeal = true
+                Menu {
+                    Button {
+                        addMealDate = visibleDate
+                        showAddMeal = true
+                    } label: {
+                        Label(text("Add meal", "Legg til måltid"), systemImage: "plus")
+                    }
+
+                    Button {
+                        showHelloFreshDelivery = true
+                    } label: {
+                        Label("HelloFresh", systemImage: "shippingbox")
+                    }
                 } label: {
-                    Label(text("Add Meal", "Legg til"), systemImage: "plus")
+                    Label(text("Add", "Legg til"), systemImage: "plus")
                 }
             }
             .sheet(isPresented: $showAddMeal) {
@@ -338,6 +323,16 @@ private struct MealPlanView: View {
                     shouldAddIngredientsToShoppingList: settings?.autoAddIngredientsToShoppingList ?? true,
                     enabledStores: enabledStores
                 )
+            }
+            .sheet(isPresented: $showHelloFreshDelivery) {
+                HelloFreshDeliveryView(
+                    language: language,
+                    initialDate: nextSunday(from: visibleDate),
+                    defaultServings: settings?.householdSize ?? 2
+                )
+            }
+            .sheet(item: $editingMealPlan) { plan in
+                EditMealPlanView(language: language, plan: plan)
             }
         }
     }
@@ -385,7 +380,9 @@ private struct MealPlanView: View {
                 ForEach(groupedPlansByDay(from: mealPlans), id: \.day) { group in
                     Section(group.day.formatted(date: .abbreviated, time: .omitted)) {
                         ForEach(group.plans) { plan in
-                            MealPlanRow(plan: plan, language: language)
+                            MealPlanRow(plan: plan, language: language) {
+                                editingMealPlan = plan
+                            }
                         }
                         .onDelete { offsets in
                             deleteMealPlans(offsets: offsets, from: group.plans)
@@ -408,6 +405,9 @@ private struct MealPlanView: View {
                         addAction: {
                             addMealDate = day
                             showAddMeal = true
+                        },
+                        editAction: { plan in
+                            editingMealPlan = plan
                         }
                     )
                 }
@@ -497,6 +497,15 @@ private struct MealPlanView: View {
         visibleDate = calendar.date(byAdding: component, value: value, to: visibleDate) ?? visibleDate
     }
 
+    private func nextSunday(from date: Date) -> Date {
+        var sundayCalendar = calendar
+        sundayCalendar.firstWeekday = 1
+        let startOfDay = sundayCalendar.startOfDay(for: date)
+        let weekday = sundayCalendar.component(.weekday, from: startOfDay)
+        let daysUntilSunday = (8 - weekday) % 7
+        return sundayCalendar.date(byAdding: .day, value: daysUntilSunday, to: startOfDay) ?? startOfDay
+    }
+
     private func deleteMealPlans(offsets: IndexSet, from source: [MealPlanEntry]) {
         for index in offsets {
             modelContext.delete(source[index])
@@ -516,15 +525,20 @@ private struct MealPlanView: View {
 private struct MealPlanRow: View {
     let plan: MealPlanEntry
     let language: AppLanguage
+    let editAction: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        Button(action: editAction) {
+            VStack(alignment: .leading, spacing: 4) {
             Text(plan.recipeTitle)
                 .font(.headline)
             Text("\(plan.mealSlot.title(language: language)) · \(plan.servings) " + text("servings", "porsjoner"))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .buttonStyle(.plain)
         .padding(.vertical, 2)
     }
 
@@ -539,6 +553,7 @@ private struct DayPlanCard: View {
     let language: AppLanguage
     let isCurrentMonth: Bool
     let addAction: () -> Void
+    let editAction: (MealPlanEntry) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -567,7 +582,9 @@ private struct DayPlanCard: View {
                     .padding(.vertical, 8)
             } else {
                 ForEach(plans) { plan in
-                    MealPlanRow(plan: plan, language: language)
+                    MealPlanRow(plan: plan, language: language) {
+                        editAction(plan)
+                    }
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
@@ -717,6 +734,142 @@ private struct AddMealPlanView: View {
     }
 }
 
+private struct EditMealPlanView: View {
+    let language: AppLanguage
+    @Bindable var plan: MealPlanEntry
+    @Environment(\.dismiss) private var dismiss
+    @State private var date: Date
+    @State private var mealSlot: MealSlot
+    @State private var recipeTitle: String
+    @State private var servings: Int
+
+    init(language: AppLanguage, plan: MealPlanEntry) {
+        self.language = language
+        self.plan = plan
+        _date = State(initialValue: plan.date)
+        _mealSlot = State(initialValue: plan.mealSlot)
+        _recipeTitle = State(initialValue: plan.recipeTitle)
+        _servings = State(initialValue: min(max(plan.servings, 1), 24))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                DatePicker(text("Date", "Dato"), selection: $date, displayedComponents: .date)
+                Picker(text("Meal", "Måltid"), selection: $mealSlot) {
+                    ForEach(MealSlot.allCases) { slot in
+                        Text(slot.title(language: language)).tag(slot)
+                    }
+                }
+                TextField(text("Recipe name", "Oppskriftsnavn"), text: $recipeTitle)
+                Stepper("\(servings) " + text("servings", "porsjoner"), value: $servings, in: 1...24)
+            }
+            .navigationTitle(text("Edit Meal", "Rediger måltid"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(text("Cancel", "Avbryt")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(text("Done", "Ferdig"), action: save)
+                        .disabled(recipeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        plan.date = date
+        plan.mealSlotRawValue = mealSlot.rawValue
+        plan.recipeTitle = recipeTitle
+        plan.servings = servings
+        dismiss()
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+}
+
+private struct HelloFreshDeliveryView: View {
+    let language: AppLanguage
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @State private var deliveryDate: Date
+    @State private var mealSlot: MealSlot = .dinner
+    @State private var servings: Int
+    @State private var mealOne = ""
+    @State private var mealTwo = ""
+    @State private var mealThree = ""
+    @State private var mealFour = ""
+
+    init(language: AppLanguage, initialDate: Date, defaultServings: Int) {
+        self.language = language
+        _deliveryDate = State(initialValue: initialDate)
+        _servings = State(initialValue: min(max(defaultServings, 1), 12))
+    }
+
+    private var mealNames: [String] {
+        [mealOne, mealTwo, mealThree, mealFour]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("HelloFresh") {
+                    DatePicker(text("Delivery Sunday", "Leveringssøndag"), selection: $deliveryDate, displayedComponents: .date)
+                    Picker(text("Meal", "Måltid"), selection: $mealSlot) {
+                        ForEach(MealSlot.allCases) { slot in
+                            Text(slot.title(language: language)).tag(slot)
+                        }
+                    }
+                    Stepper("\(servings) " + text("servings", "porsjoner"), value: $servings, in: 1...12)
+                }
+
+                Section(text("Meals in the box", "Måltider i matkassen")) {
+                    TextField(text("Meal 1", "Måltid 1"), text: $mealOne)
+                    TextField(text("Meal 2", "Måltid 2"), text: $mealTwo)
+                    TextField(text("Meal 3", "Måltid 3"), text: $mealThree)
+                    TextField(text("Meal 4", "Måltid 4"), text: $mealFour)
+                }
+
+                Section {
+                    Text(text(
+                        "Meals are added as consecutive planned dinners starting on the delivery Sunday.",
+                        "Måltidene legges inn som planlagte middager på påfølgende dager fra leveringssøndagen."
+                    ))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("HelloFresh")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(text("Cancel", "Avbryt")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(text("Add", "Legg til"), action: save)
+                        .disabled(mealNames.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        let startDate = Calendar.current.startOfDay(for: deliveryDate)
+        for (offset, mealName) in mealNames.enumerated() {
+            let date = Calendar.current.date(byAdding: .day, value: offset, to: startDate) ?? startDate
+            modelContext.insert(MealPlanEntry(date: date, mealSlot: mealSlot, recipeTitle: "HelloFresh: \(mealName)", servings: servings))
+        }
+        dismiss()
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+}
+
 private struct ReceiptScannerView: View {
     let language: AppLanguage
     let currencyCode: String
@@ -728,6 +881,7 @@ private struct ReceiptScannerView: View {
     @State private var selectedStore: GroceryStore
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showManualPriceEntry = false
+    @State private var editingReceiptItem: ReceiptLineItem?
 
     init(language: AppLanguage, currencyCode: String, enabledStores: [GroceryStore], recognitionLanguage: ReceiptRecognitionLanguage) {
         self.language = language
@@ -862,13 +1016,21 @@ private struct ReceiptScannerView: View {
                                 Spacer()
                                 Text(item.price.formattedCurrency(code: currencyCode))
                             }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                editingReceiptItem = item
+                            }
                         }
+                        .onDelete(perform: deleteReceiptItems)
                     }
                 }
             }
             .navigationTitle(text("Receipts", "Kvitteringer"))
             .sheet(isPresented: $showManualPriceEntry) {
                 ManualPriceEntryView(language: language, currencyCode: currencyCode, enabledStores: enabledStores)
+            }
+            .sheet(item: $editingReceiptItem) { item in
+                EditReceiptLineItemView(item: item, language: language, currencyCode: currencyCode, enabledStores: enabledStores)
             }
             .onChange(of: selectedPhoto) { _, newValue in
                 guard let newValue else { return }
@@ -907,6 +1069,12 @@ private struct ReceiptScannerView: View {
             modelContext.insert(StorePrice(itemName: line.name, store: selectedStore, price: line.price, quantity: 1, unit: "stk", currency: currencyCode, source: "receipt"))
         }
         recognizedLines = []
+    }
+
+    private func deleteReceiptItems(offsets: IndexSet) {
+        for index in offsets {
+            modelContext.delete(trackedReceiptItems[index])
+        }
     }
 
     private func text(_ english: String, _ norwegian: String) -> String {
@@ -1010,6 +1178,9 @@ private struct SettingsFormView: View {
                 ForEach(DietaryPreference.allCases) { preference in
                     Toggle(preference.title(language: language), isOn: dietaryPreferenceBinding(for: preference))
                 }
+
+                TextField(text("Avoided ingredients, comma separated", "Ingredienser du unngår, separert med komma"), text: avoidedIngredientsTextBinding)
+                    .textInputAutocapitalization(.never)
             }
 
             Section(text("Receipts", "Kvitteringer")) {
@@ -1110,6 +1281,16 @@ private struct SettingsFormView: View {
         }
     }
 
+    private var avoidedIngredientsTextBinding: Binding<String> {
+        Binding {
+            settings.avoidedIngredients.joined(separator: ", ")
+        } set: { value in
+            settings.avoidedIngredients = value.components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+    }
+
     private func clearCheckedShoppingItems() {
         for item in shoppingItems where item.isChecked {
             modelContext.delete(item)
@@ -1198,6 +1379,65 @@ private struct ManualPriceEntryView: View {
 
     private func save() {
         modelContext.insert(StorePrice(itemName: itemName, store: store, price: price, quantity: quantity, unit: unit, currency: currencyCode, source: "manual", updatedAt: purchasedAt))
+        dismiss()
+    }
+
+    private func text(_ english: String, _ norwegian: String) -> String {
+        language == .english ? english : norwegian
+    }
+}
+
+private struct EditReceiptLineItemView: View {
+    @Bindable var item: ReceiptLineItem
+    let language: AppLanguage
+    let currencyCode: String
+    let enabledStores: [GroceryStore]
+    @Environment(\.dismiss) private var dismiss
+    @State private var store: GroceryStore
+
+    init(item: ReceiptLineItem, language: AppLanguage, currencyCode: String, enabledStores: [GroceryStore]) {
+        self.item = item
+        self.language = language
+        self.currencyCode = currencyCode
+        self.enabledStores = enabledStores
+        _store = State(initialValue: item.store)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(text("Item", "Vare")) {
+                    TextField(text("Item name", "Varenavn"), text: $item.itemName)
+                    Picker(text("Store", "Butikk"), selection: $store) {
+                        ForEach(enabledStores) { store in
+                            Text(store.displayName).tag(store)
+                        }
+                    }
+                }
+
+                Section(text("Receipt", "Kvittering")) {
+                    TextField(text("Price", "Pris") + " (\(currencyCode))", value: $item.price, format: .number)
+                        .keyboardType(.decimalPad)
+                    DatePicker(text("Purchased", "Kjøpt"), selection: $item.purchasedAt, displayedComponents: .date)
+                    TextField(text("Raw text", "Råtekst"), text: $item.rawText, axis: .vertical)
+                        .lineLimit(3, reservesSpace: true)
+                }
+            }
+            .navigationTitle(text("Edit Receipt Item", "Rediger kvitteringsvare"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(text("Cancel", "Avbryt")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(text("Done", "Ferdig"), action: save)
+                        .disabled(item.itemName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || item.price <= 0)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        item.storeRawValue = store.rawValue
         dismiss()
     }
 

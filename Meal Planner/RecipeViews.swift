@@ -394,10 +394,14 @@ private struct RecipeFormView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(text("Save", "Lagre"), action: save)
-                        .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!canSave)
                 }
             }
         }
+    }
+
+    private var canSave: Bool {
+        !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.caloriesPerServing > 0
     }
 
     private func text(_ english: String, _ norwegian: String) -> String {
@@ -495,6 +499,10 @@ private struct RecipeRow: View {
                 .foregroundStyle(.secondary)
 
             Text(recipe.course.title(language: language) + " · " + recipe.difficulty.title(language: language) + cuisineText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Label("\(recipe.caloriesPerServing) kcal · \(recipe.proteinGrams.formatted()) g " + text("protein", "protein"), systemImage: "flame")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
